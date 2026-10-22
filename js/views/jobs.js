@@ -95,6 +95,37 @@ async function mutate(ctx, job, fn) {
   await ctx.store.saveSub(job.brandId, COL, cur);
   return cur;
 }
+
+// Foto bukti checklist: disimpan terpisah di brands/{brandId}/job_photos (id = jobId_itemId) supaya daftar job tetap ringan.
+const PHOTO_COL = "job_photos";
+const photoId = (job, it) => `${job.id}_${it.id}`;
+function compressImg(file, maxSide, quality) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, maxSide / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Foto tidak bisa dibaca. Coba foto lain.")); };
+    img.src = url;
+  });
+}
+async function showProof(ctx, job, it) {
+  const img = h("img", { class: "ab-prev", alt: "Foto bukti", style: "max-height:70vh" });
+  const info = h("p", { class: "muted" }, "Memuat foto…");
+  dialog({ title: "Foto bukti: " + it.text, body: h("div", {}, img, info), actions: [{ label: "Tutup" }] });
+  try {
+    const r = await ctx.store.getSub(job.brandId, PHOTO_COL, photoId(job, it));
+    if (r && r.photo) { img.src = r.photo; info.textContent = [r.by, r.at ? stamp(r.at) : ""].filter(Boolean).join(" · "); }
+    else info.textContent = "Foto tidak ditemukan.";
+  } catch (e) { info.textContent = e.message || "Foto gagal dimuat."; }
+}
+const proofBtn = (ctx, job, it) => h("button", { class: "btn sm ghost", type: "button", "aria-label": "Lihat foto bukti", onclick: () => showProof(ctx, job, it) }, icon("camera", 14));
 const brandOf = (ctx, id) => ctx.brands.find((b) => b.id === id) || { id, name: id, short: id, color: "#888" };
 
 /* ---------- KPI ---------- */
@@ -197,20 +228,47 @@ async function memberToday(ctx) {
 
   const card = (job) => {
     const done = isDone(job), late = isOverdue(job, t);
-    const toggle = async (it, btn) => {
-      btn.disabled = true;
-      try {
-        const upd = await mutate(ctx, job, (cur) => {
-          if (cur.cancelled) throw new Error("Job ini sudah dibatalkan supervisor.");
-          const x = (cur.items || []).find((i) => i.id === it.id);
-          if (!x) return;
-          x.done = !x.done; x.doneAt = x.done ? nowIso() : null;
-          log(cur, user.name, x.done ? "Centang" : "Batal centang", x.text);
-          settle(cur, user.name);
+    // Mencentang butuh foto bukti; membatalkan centang tidak.
+    const commit = async (it, photo) => {
+      if (photo) await ctx.store.saveSub(job.brandId, PHOTO_COL, { id: photoId(job, it), jobId: job.id, itemId: it.id, photo, by: user.name, at: nowIso() });
+      const upd = await mutate(ctx, job, (cur) => {
+        if (cur.cancelled) throw new Error("Job ini sudah dibatalkan supervisor.");
+        const x = (cur.items || []).find((i) => i.id === it.id);
+        if (!x) return;
+        x.done = !!photo; x.doneAt = photo ? nowIso() : null; x.hasPhoto = !!photo;
+        log(cur, user.name, photo ? "Centang + foto bukti" : "Batal centang", x.text);
+        settle(cur, user.name);
+      });
+      replace(upd);
+      if (isDone(upd) && !isDone(job)) toast("Job selesai. Mantap!");
+    };
+    const askPhoto = (it) => {
+      let data = null;
+      const prev = h("img", { class: "ab-prev", alt: "", hidden: true });
+      const pick = (label, capture) => {
+        const input = h("input", { type: "file", accept: "image/*", hidden: true, ...(capture ? { capture } : {}) });
+        input.addEventListener("change", async () => {
+          const f = input.files?.[0];
+          if (!f) return;
+          try { data = await compressImg(f, 900, 0.65); prev.src = data; prev.hidden = false; } catch (e) { toast(e.message, "err"); }
+          input.value = "";
         });
-        replace(upd);
-        if (isDone(upd) && !isDone(job)) toast("Job selesai. Mantap!");
-      } catch (e) { toast(e.message || String(e), "err"); btn.disabled = false; }
+        return h("span", {}, h("button", { class: "btn", type: "button", onclick: () => input.click() }, icon("camera", 16), label), input);
+      };
+      dialog({
+        title: "Foto bukti",
+        body: h("div", {}, h("p", { class: "muted" }, "Lampirkan foto sebagai bukti untuk: " + it.text),
+          h("div", { class: "ab-photo" }, h("div", { class: "row-tight" }, pick("Ambil foto", "environment"), pick("Pilih dari galeri")), prev)),
+        actions: [{ label: "Batal" }, { label: "Centang", kind: "primary", onClick: async () => {
+          if (!data) throw new Error("Ambil atau pilih foto bukti dulu.");
+          await commit(it, data);
+        } }],
+      });
+    };
+    const toggle = async (it, btn) => {
+      if (!it.done) return askPhoto(it);
+      btn.disabled = true;
+      try { await commit(it, null); } catch (e) { toast(e.message || String(e), "err"); btn.disabled = false; }
     };
     const resultDialog = () => {
       const note = h("textarea", { class: "textarea", id: "jb-note", rows: 4, placeholder: "Apa yang sudah dikerjakan, kendala, atau hal yang perlu dicek supervisor." }, job.notes || "");
@@ -237,7 +295,7 @@ async function memberToday(ctx) {
       ref && h("a", { class: "refl", href: ref, target: "_blank", rel: "noopener" }, "Buka referensi"),
       h("ul", { class: "jb-items" }, itemsOf(job).map((it) => {
         const box = h("button", { class: "jb-box" + (it.done ? " on" : ""), type: "button", "aria-pressed": String(!!it.done), "aria-label": (it.done ? "Batalkan centang: " : "Centang: ") + it.text, onclick: () => toggle(it, box) }, icon("check", 18));
-        return h("li", { class: "jb-item" + (it.done ? " done" : "") }, box, h("span", { class: "jb-txt" }, it.text, it.revision && chip("Revisi", "warn")), it.done && it.doneAt && h("span", { class: "jb-time" }, hm(it.doneAt)));
+        return h("li", { class: "jb-item" + (it.done ? " done" : "") }, box, h("span", { class: "jb-txt" }, it.text, it.revision && chip("Revisi", "warn")), it.done && it.hasPhoto && proofBtn(ctx, job, it), it.done && it.doneAt && h("span", { class: "jb-time" }, hm(it.doneAt)));
       })),
       (job.notes || res) && h("div", { class: "jb-result" }, job.notes && h("div", {}, h("b", {}, "Catatanmu: "), job.notes), res && h("a", { href: res, target: "_blank", rel: "noopener" }, "Link hasil")),
       job.review && h("div", { class: "jb-review" }, h("span", { class: "jb-stars", "aria-label": `Nilai ${job.review.score} dari 5` }, stars(job.review.score)), job.review.note && h("span", {}, " " + job.review.note), h("div", { class: "muted" }, `Review oleh ${job.review.by}, ${stamp(job.review.at)}`)),
@@ -519,7 +577,7 @@ function openDetail(ctx, job, lead, members) {
     job.brief && h("p", { class: "jb-brief" }, job.brief),
     ref && h("a", { class: "refl", href: ref, target: "_blank", rel: "noopener" }, "Buka referensi"),
     h("h3", {}, `Checklist (${doneCount(job)}/${itemsOf(job).length})`),
-    h("ul", { class: "jb-items" }, itemsOf(job).map((it) => h("li", { class: "jb-item" + (it.done ? " done" : "") }, h("span", { class: "jb-box" + (it.done ? " on" : ""), "aria-hidden": "true" }, icon("check", 16)), h("span", { class: "jb-txt" }, it.text, it.revision && chip("Revisi", "warn")), h("span", { class: "jb-time" }, it.done && it.doneAt ? stamp(it.doneAt) : "")))),
+    h("ul", { class: "jb-items" }, itemsOf(job).map((it) => h("li", { class: "jb-item" + (it.done ? " done" : "") }, h("span", { class: "jb-box" + (it.done ? " on" : ""), "aria-hidden": "true" }, icon("check", 16)), h("span", { class: "jb-txt" }, it.text, it.revision && chip("Revisi", "warn")), it.done && it.hasPhoto && proofBtn(ctx, job, it), h("span", { class: "jb-time" }, it.done && it.doneAt ? stamp(it.doneAt) : "")))),
     (job.notes || res) && h("div", { class: "jb-result" }, job.notes && h("div", {}, h("b", {}, "Catatan hasil: "), job.notes), res && h("a", { href: res, target: "_blank", rel: "noopener" }, "Link hasil")),
     !lead && job.review && h("div", { class: "jb-review" }, h("span", { class: "jb-stars" }, stars(job.review.score)), job.review.note && h("span", {}, " " + job.review.note)),
     reviewBox,
