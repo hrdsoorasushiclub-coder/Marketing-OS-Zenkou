@@ -1,4 +1,3 @@
-import { dropzone, uploadToDrive } from "../drive.js";
 import { h, icon, toast, dialog, confirmDialog } from "../ui.js";
 
 /* ---------- pilihan isian (mengikuti SOP dan handbook) ---------- */
@@ -20,7 +19,6 @@ const parseYmd = (s) => { const [y, m, d] = String(s).split("-").map(Number); re
 const fmtDay = (s) => (s ? parseYmd(s).toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "");
 const fmtShort = (s) => (s ? parseYmd(s).toLocaleDateString("id-ID", { day: "numeric", month: "short" }) : "");
 const monthLabel = (y, m) => new Date(y, m, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" });
-const monthFolder = (c) => (c.date ? c.date.slice(0, 7) : "Tanpa tanggal");
 const newId = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const sortKey = (c) => `${c.date || "9999-12-31"} ${c.time || "00:00"}`;
 const statusKind = (s) => (s === "Published" || s === "Approved" ? "ok" : s === "Revision Required" || s === "Upload Issue" ? "warn" : "");
@@ -115,17 +113,6 @@ export async function render(ctx) {
     const propsIn = tagInput({ id: "ct-props", values: c.props || [], suggestions: allOf(items, "props"), placeholder: "Ketik nama props, lalu Enter" });
     const notes = h("textarea", { class: "textarea", id: "ct-notes", rows: 3, placeholder: "Catatan untuk tim: konsep, lokasi, hal yang perlu disiapkan, dll." });
     notes.value = c.notes || "";
-    let edited = [...(c.editedFiles || [])];
-    const editedList = h("div", { class: "filelist" });
-    const paintEdited = () => editedList.replaceChildren(...edited.map((f) => h("div", { class: "fileitem" },
-      icon("db", 16), h("a", { href: safeUrl(f.url) || "#", target: "_blank", rel: "noopener noreferrer" }, f.name || "file"),
-      h("button", { class: "linklike small", type: "button", "aria-label": `Lepas ${f.name}`, onclick: () => { edited = edited.filter((x) => x !== f); paintEdited(); } }, "lepas"))));
-    paintEdited();
-    const editedZone = dropzone({ store, brandId: brand.id, multiple: true, path: () => ["Konten", monthFolder({ date: date.value || c.date })],
-      label: "Tarik file hasil editing ke sini, atau klik untuk memilih",
-      onUploaded: (r) => { edited.push({ name: r.name, url: r.url, size: r.size, at: new Date().toISOString() }); paintEdited(); } });
-    const coverZone = dropzone({ store, brandId: brand.id, path: () => ["Konten", monthFolder({ date: date.value || c.date }), "Cover"], accept: "image/*", label: "Tarik gambar cover ke sini, atau klik",
-      onUploaded: (r) => { cover.value = r.url; toast("Cover terunggah ke Drive. Klik Simpan."); } });
 
     const body = h("div", {},
       field("Judul / topik konten", title, null, "ct-title"),
@@ -139,10 +126,7 @@ export async function render(ctx) {
       field("Referensi konten", ref, "Link contoh atau moodboard yang jadi acuan.", "ct-ref"),
       field("Caption", caption, null, "ct-caption"),
       h("div", { class: "row" }, field("Approval caption", capState, null, "ct-capstate"), field("Status konten", status, "Alur: Planned sampai Published (lihat SOP).", "ct-status")),
-      h("div", { class: "field" }, h("label", {}, "File hasil editing"), editedZone, editedList,
-        h("span", { class: "hint" }, "Video atau gambar yang sudah jadi. Tersimpan di Google Drive, folder Konten per bulan.")),
-      field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten tayang, misalnya link Instagram, TikTok, atau YouTube.", "ct-plink"),
-      h("div", { class: "field" }, h("label", {}, "Unggah cover / visual"), coverZone),
+field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten tayang, misalnya link Instagram, TikTok, atau YouTube.", "ct-plink"),
       field("Link cover / visual", cover, "Dipakai di simulasi feed Instagram. Link Google Drive atau gambar langsung; file harus bisa dilihat publik. Kalau kosong, tampil kotak warna.", "ct-cover"),
       field("Catatan", notes, null, "ct-notes"));
 
@@ -166,7 +150,7 @@ export async function render(ctx) {
           ...c, title: title.value.trim(), date: date.value, time: time.value, type: type.value, pillar: pillar.value.trim(),
           platforms: plats.filter(({ el }) => el.checked).map(({ p }) => p), reference: ref.value.trim(), caption: caption.value,
           captionApproval: capState.value, status: status.value, cover: cover.value.trim(), postLink: plink.value.trim(),
-          menu: menuIn.get(), props: propsIn.get(), notes: notes.value.trim(), editedFiles: edited,
+          menu: menuIn.get(), props: propsIn.get(), notes: notes.value.trim(),
         });
         await reload(); redraw(); toast("Konten tersimpan.");
       },
@@ -269,20 +253,6 @@ export async function render(ctx) {
         return h("div", {}, pl && h("a", { href: pl, target: "_blank", rel: "noopener noreferrer", title: pl }, h("span", {}, hostOf(pl)), icon("arrow", 13)),
           h("div", { class: c.status === "Published" && !pl ? "need-link" : "" }, edit));
       };
-      const dropOnRow = async (c, files, row) => {
-        if (store.mode !== "firebase") return toast("Unggah langsung butuh mode Firebase. Buka konten lalu tempel link.");
-        row.classList.add("uploading");
-        let cur = c, ok = 0;
-        for (const file of files) {
-          try {
-            const r = await uploadToDrive({ store, brandId: brand.id, path: ["Konten", monthFolder(c)], file });
-            cur = { ...cur, editedFiles: [...(cur.editedFiles || []), { name: r.name, url: r.url, size: r.size, at: new Date().toISOString() }] };
-            await store.saveContent(brand.id, cur); ok++;
-          } catch (e) { toast(`${file.name}: ${e.message}`); }
-        }
-        row.classList.remove("uploading");
-        if (ok) { await reload(); redraw(); toast(`${ok} file hasil editing tersimpan di Drive.`); }
-      };
       const tr = (c) => {
         const link = safeUrl(c.reference);
         const row = h("tr", {},
@@ -291,10 +261,7 @@ export async function render(ctx) {
             h("div", { class: "chips", style: "margin-top:6px" }, chip(c.type || "—"), c.pillar && chip(c.pillar, "brand")),
             (c.menu || []).length > 0 && h("div", { class: "cp-line" }, h("span", { class: "muted" }, "Menu: "), c.menu.join(", ")),
             (c.props || []).length > 0 && h("div", { class: "cp-line" }, h("span", { class: "muted" }, "Props: "), c.props.join(", ")),
-            c.notes && h("div", { class: "cp-note", title: c.notes }, c.notes),
-            (c.editedFiles || []).length > 0 && h("div", { class: "cp-line" }, icon("db", 13), " ",
-              c.editedFiles.slice(0, 3).map((f, i) => [i ? ", " : "", h("a", { href: safeUrl(f.url) || "#", target: "_blank", rel: "noopener noreferrer", title: f.name }, f.name.length > 22 ? f.name.slice(0, 20) + "…" : f.name)]),
-              c.editedFiles.length > 3 && ` +${c.editedFiles.length - 3}`)),
+            c.notes && h("div", { class: "cp-note", title: c.notes }, c.notes)),
           h("td", { class: "refcell" }, link
             ? h("a", { href: link, target: "_blank", rel: "noopener noreferrer", title: link }, h("span", {}, hostOf(link)), icon("arrow", 13))
             : c.reference ? h("span", { class: "muted", title: c.reference }, c.reference) : h("span", { class: "muted" }, "—")),
@@ -304,10 +271,6 @@ export async function render(ctx) {
           h("td", {}, statusSel(c)),
           h("td", { class: "refcell" }, postCell(c)),
           h("td", { class: "act" }, h("button", { class: "btn sm ghost", type: "button", "aria-label": `Ubah ${c.title}`, onclick: () => openContent(c) }, icon("edit", 16))));
-        row.title = "Tarik file hasil editing ke baris ini untuk mengunggah ke Drive";
-        row.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); row.classList.add("dropping"); } });
-        row.addEventListener("dragleave", () => row.classList.remove("dropping"));
-        row.addEventListener("drop", (e) => { e.preventDefault(); row.classList.remove("dropping"); const fs = [...e.dataTransfer.files]; if (fs.length) dropOnRow(c, fs, row); });
         return row;
       };
       tableBox.replaceChildren(h("div", { class: "tablewrap plain" }, h("table", {},

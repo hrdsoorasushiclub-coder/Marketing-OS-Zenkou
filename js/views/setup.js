@@ -1,6 +1,5 @@
 import { h, icon, toast, dialog, confirmDialog } from "../ui.js";
 import { safeUrl, coverSrc } from "./content.js";
-import { dropzone } from "../drive.js";
 
 /* Penyimpanan (per brand): setup/guideline (satu dokumen), brand_assets, templates, opening_kit.
    Gambar tidak diunggah ke Firebase; yang disimpan adalah link (Google Drive, Canva, dll). */
@@ -83,9 +82,6 @@ export async function render(ctx) {
     editDialog({
       title: existing ? "Ubah versi logo" : "Versi logo baru", existing, label: `"${l.name}"`,
       body: h("div", {}, field("Nama versi", name, null, "lg-name"),
-        h("div", { class: "field" }, h("label", {}, "Unggah file logo"), dropzone({ store, brandId: brand.id, path: ["Logo"], accept: "image/*,.svg,.pdf,.ai",
-          onUploaded: (r) => { url.value = r.url; if (!name.value.trim()) name.value = r.name.replace(/\.[^.]+$/, ""); toast("Terunggah ke Drive. Klik Simpan."); } }),
-          h("span", { class: "hint" }, "Atau tempel link di bawah.")),
         field("Link gambar", url, "Link Google Drive (dibagikan publik) atau gambar langsung. Dipakai untuk pratinjau.", "lg-url"), field("Catatan pemakaian", note, null, "lg-note")),
       onSave: async () => {
         if (!name.value.trim()) throw new Error("Nama versi logo wajib diisi.");
@@ -192,9 +188,6 @@ export async function render(ctx) {
     editDialog({
       title: existing ? "Ubah aset" : "Aset baru", existing, label: `aset "${a.name}"`,
       body: h("div", {}, field("Nama aset", name, null, "as-name"), field("Kategori", cat, null, "as-cat"),
-        h("div", { class: "field" }, h("label", {}, "Unggah file"), dropzone({ store, brandId: brand.id, path: () => [cat.value],
-          onUploaded: (r) => { url.value = r.url; if (!name.value.trim()) name.value = r.name.replace(/\.[^.]+$/, ""); toast("Terunggah ke Drive. Klik Simpan."); } }),
-          h("span", { class: "hint" }, "Masuk ke folder sesuai kategori. Atau tempel link di bawah.")),
         field("Link file", url, "Link Google Drive, Canva, atau lainnya.", "as-url"), field("Catatan", note, null, "as-note")),
       onSave: async () => {
         if (!name.value.trim()) throw new Error("Nama aset wajib diisi.");
