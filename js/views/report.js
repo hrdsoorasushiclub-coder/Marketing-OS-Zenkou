@@ -37,6 +37,60 @@ const table = (heads, rows) => h("div", { class: "tablewrap plain" }, h("table",
   h("tbody", {}, rows.map((r) => h("tr", {}, r.map((c, i) => h("td", { class: heads[i][1] ? "num" : "" }, c)))))));
 const safeHref = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : ""; } catch { return ""; } };
 
+/* ---------- grafik (SVG dan batang CSS, tanpa library; ikut tema gelap dan tercetak di PDF) ---------- */
+const PX = "print-color-adjust:exact;-webkit-print-color-adjust:exact;";
+const compact = (v) => new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 }).format(v);
+const sv = (tag, attrs = {}, ...kids) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  kids.flat().forEach((k) => { if (k != null && k !== false) e.append(k.nodeType ? k : document.createTextNode(String(k))); });
+  return e;
+};
+const legend = (series) => h("div", { class: "row-tight", style: "margin-bottom:6px;font-size:13px" }, series.map((s) =>
+  h("span", { style: "display:inline-flex;align-items:center;gap:6px" }, h("i", { style: `width:12px;height:12px;border-radius:3px;background:${s.color};display:inline-block;` + PX }), s.name)));
+// Batang horizontal: rows = [{label, value, text, color?, title?}]
+const hbars = (rows, color) => {
+  const max = Math.max(1, ...rows.map((r) => r.value || 0));
+  return h("div", { style: PX + "margin-top:4px" }, rows.map((r) => h("div", { style: "display:grid;grid-template-columns:minmax(80px,220px) 1fr auto;gap:10px;align-items:center;margin:7px 0;font-size:13.5px" },
+    h("div", { style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap", title: r.title || "" }, r.label),
+    h("div", { style: "height:12px;border-radius:999px;background:var(--line-2);overflow:hidden;" + PX },
+      h("i", { style: `display:block;height:100%;width:${(r.value || 0) > 0 ? Math.max(2, Math.round(((r.value || 0) / max) * 100)) : 0}%;background:${r.color || color || "var(--brand)"};border-radius:999px;` + PX })),
+    h("div", { style: "font-weight:700;white-space:nowrap" }, r.text))));
+};
+// Batang vertikal berkelompok: groups = [{label, vals:[...]}], series = [{name, color}]
+const vbars = (groups, series) => {
+  const n = groups.length, gw = Math.max(64, Math.min(110, 640 / n)), L = 46, W = L + n * gw + 10, H = 230, T = 16, B = 28, ph = H - T - B;
+  const max = Math.max(1, ...groups.flatMap((g) => g.vals)), bw = Math.min(26, (gw - 14) / series.length);
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Grafik batang per bulan", style: "max-width:100%;height:auto;font-family:inherit" });
+  [0, 0.5, 1].forEach((t) => {
+    const y = T + ph - t * ph;
+    svg.append(sv("line", { x1: L, x2: W - 6, y1: y, y2: y, style: "stroke:var(--line);stroke-width:1" }), sv("text", { x: L - 6, y: y + 4, "text-anchor": "end", style: "font-size:11px;fill:var(--ink-3)" }, compact(max * t)));
+  });
+  groups.forEach((g, i) => {
+    const gx = L + i * gw + (gw - bw * series.length) / 2;
+    g.vals.forEach((v, j) => {
+      const bh = Math.round((v / max) * ph), x = gx + j * bw;
+      svg.append(sv("rect", { x, y: T + ph - bh, width: bw - 3, height: Math.max(bh, v > 0 ? 1 : 0), rx: 3, style: `fill:${series[j].color}` }),
+        sv("text", { x: x + (bw - 3) / 2, y: T + ph - bh - 4, "text-anchor": "middle", style: "font-size:10.5px;fill:var(--ink-2)" }, v ? compact(v) : ""));
+    });
+    svg.append(sv("text", { x: L + i * gw + gw / 2, y: H - 8, "text-anchor": "middle", style: "font-size:12px;fill:var(--ink-2)" }, g.label));
+  });
+  return h("div", { style: "overflow-x:auto" }, legend(series), svg);
+};
+// Garis: pts = [{date, v}]
+const lineChart = (pts) => {
+  const W = 640, H = 210, L = 56, R = 16, T = 16, B = 30, ph = H - T - B, pw = W - L - R;
+  const vs = pts.map((p) => p.v), lo = Math.min(...vs), hi = Math.max(...vs), span = hi - lo || 1;
+  const X = (i) => L + (pts.length === 1 ? 0 : (i / (pts.length - 1)) * pw), Y = (v) => T + ph - ((v - lo) / span) * ph;
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Grafik pertumbuhan followers", style: "max-width:100%;height:auto;font-family:inherit" });
+  [lo, lo + span / 2, hi].forEach((v) => svg.append(sv("line", { x1: L, x2: W - R, y1: Y(v), y2: Y(v), style: "stroke:var(--line);stroke-width:1" }), sv("text", { x: L - 6, y: Y(v) + 4, "text-anchor": "end", style: "font-size:11px;fill:var(--ink-3)" }, nf.format(Math.round(v)))));
+  svg.append(sv("polyline", { points: pts.map((p, i) => `${X(i)},${Y(p.v)}`).join(" "), style: "fill:none;stroke:var(--brand);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round" }));
+  pts.forEach((p, i) => svg.append(sv("circle", { cx: X(i), cy: Y(p.v), r: 3.5, style: "fill:var(--brand)" })));
+  svg.append(sv("text", { x: L, y: H - 8, "text-anchor": "start", style: "font-size:12px;fill:var(--ink-2)" }, pts[0].date),
+    sv("text", { x: W - R, y: H - 8, "text-anchor": "end", style: "font-size:12px;fill:var(--ink-2)" }, pts.at(-1).date));
+  return h("div", { style: "overflow-x:auto" }, svg);
+};
+
 export async function render(ctx) {
   const { store, brand } = ctx;
   const crumbs = [{ label: "Operation", href: "#/ops" }, { label: brand.name }, { label: "Report" }];
@@ -113,7 +167,8 @@ export async function render(ctx) {
     S.y = Number(y);
   }
 
-  function openManual(ex) {
+  function openManual(ex, pre) {
+    const src = ex || pre || {};
     const n = (v) => (v === "" || v == null ? null : Math.max(0, Number(v) || 0));
     const f = {};
     const inp = (k, label, attrs = {}) => { f[k] = h("input", { class: "input", ...attrs, oninput: () => upd() }); return h("div", { class: "field" }, h("label", {}, label), f[k]); };
@@ -123,12 +178,12 @@ export async function render(ctx) {
       const it = ["likes", "comments", "saved", "shares"].reduce((t, k) => t + (n(f[k].value) || 0), 0);
       erBox.replaceChildren(h("b", {}, "ER: "), reach ? fmtPct((it / reach) * 100) : "isi Reach dulu", ` · interaksi ${fmtNum(it)} (like + komentar + save + share)`);
     };
-    const typeSel = h("select", { class: "select" }, TYPES.map((t) => h("option", { value: t, selected: t === (ex?.type || "Feed Post") }, t)));
+    const typeSel = h("select", { class: "select" }, TYPES.map((t) => h("option", { value: t, selected: t === (src.type || "Feed Post") }, t)));
     const grid = (...k) => h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:0 12px" }, ...k);
     const body = h("div", {},
-      grid(inp("date", "Tanggal tayang", { type: "date", value: ex?.date || today() }), h("div", { class: "field" }, h("label", {}, "Tipe konten"), typeSel)),
-      inp("caption", "Judul / caption singkat", { type: "text", value: ex?.caption || "", maxlength: 140 }),
-      inp("link", "Link konten (opsional)", { type: "url", value: ex?.permalink || "", placeholder: "https://www.instagram.com/p/..." }),
+      grid(inp("date", "Tanggal tayang", { type: "date", value: src.date || today() }), h("div", { class: "field" }, h("label", {}, "Tipe konten"), typeSel)),
+      inp("caption", "Judul / caption singkat", { type: "text", value: src.caption || "", maxlength: 140 }),
+      inp("link", "Link konten (opsional)", { type: "url", value: src.permalink || "", placeholder: "https://www.instagram.com/p/..." }),
       grid(inp("reach", "Reach", { type: "number", min: 0, value: ex?.reach ?? "" }), inp("views", "Views (opsional)", { type: "number", min: 0, value: ex?.views ?? "" }),
         inp("likes", "Likes", { type: "number", min: 0, value: ex?.likes ?? "" }), inp("comments", "Komentar", { type: "number", min: 0, value: ex?.comments ?? "" }),
         inp("saved", "Save", { type: "number", min: 0, value: ex?.saved ?? "" }), inp("shares", "Share", { type: "number", min: 0, value: ex?.shares ?? "" })),
@@ -136,14 +191,14 @@ export async function render(ctx) {
       erBox);
     upd();
     dialog({
-      title: ex ? "Ubah konten" : "Input konten manual", body,
+      title: ex ? "Ubah konten" : pre ? "Input insight konten" : "Input konten manual", body,
       actions: [{ label: "Batal" }, { label: "Simpan", kind: "primary", onClick: async () => {
         const date = f.date.value;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Tanggal wajib diisi.");
         const reach = n(f.reach.value);
         if (reach == null) throw new Error("Reach wajib diisi supaya ER bisa dihitung.");
         const likes = n(f.likes.value) || 0, comments = n(f.comments.value) || 0, saved = n(f.saved.value) || 0, shares = n(f.shares.value) || 0;
-        const post = { id: ex?.id || "m-" + Date.now().toString(36), manual: true, date, type: typeSel.value, permalink: f.link.value.trim(), caption: f.caption.value.trim().slice(0, 140),
+        const post = { id: ex?.id || "m-" + Date.now().toString(36), manual: true, cid: ex?.cid || pre?.cid || null, date, type: typeSel.value, permalink: f.link.value.trim(), caption: f.caption.value.trim().slice(0, 140),
           reach, views: n(f.views.value), likes, comments, saved, shares, interactions: likes + comments + saved + shares };
         await saveManual(post, ex);
         const fol = n(f.followers.value);
@@ -192,6 +247,15 @@ export async function render(ctx) {
     const published = plan.filter((c) => c.status === "Published");
     const byPillar = {};
     plan.forEach((c) => { const k = c.pillar || "Tanpa pillar"; (byPillar[k] ||= { total: 0, pub: 0 }).total++; if (c.status === "Published") byPillar[k].pub++; });
+    const linked = new Set(snaps.flatMap((x) => x.posts || []).map((x) => x.cid).filter(Boolean));
+    const toPostType = (t) => (TYPES.includes(t) ? t : "Feed Post");
+    const pending = published.filter((c) => (c.platforms || []).includes("Instagram") && !linked.has(c.id)).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const pendBlock = section("Konten Published, insight belum diisi",
+      h("p", { class: "muted", style: "margin-bottom:10px" }, `${pending.length} konten sudah Published tapi belum punya data insight. Klik "Input insight", isi angkanya, lalu konten masuk ke report.`),
+      table([["Tanggal"], ["Konten"], [""]], pending.map((c) => [fmtDate(c.date), c.title || "(tanpa judul)",
+        h("div", { class: "no-print" }, h("button", { class: "btn sm primary", type: "button", onclick: () => openManual(null, {
+          cid: c.id, date: c.date || today(), type: toPostType(c.type), caption: c.title || "",
+          permalink: /instagram\.com/.test(c.postLink || "") ? c.postLink : "" }) }, "Input insight"))])));
     const kolRows = kols.filter((k) => inRange(k.postedAt, r));
     const kolViews = kolRows.reduce((s, k) => s + num(k.views), 0);
     const kolSpend = kolRows.filter((k) => k.type === "paid").reduce((s, k) => s + num(k.price), 0);
@@ -207,6 +271,25 @@ export async function render(ctx) {
     const yearSel = h("select", { class: "select", "aria-label": "Tahun", style: "width:auto", onchange: (e) => { S.y = Number(e.target.value); draw(); } },
       years.map((y) => h("option", { value: y, selected: y === S.y }, y)));
 
+    S.rank ||= "er";
+    const prevLabel = P ? `${PERIODS.find((x) => x[0] === pk)[1]} ${py}` : "";
+    const rankRows = posts.filter((p) => (S.rank === "er" ? erOf(p) != null : p.reach != null)).sort((a, b) => (S.rank === "er" ? erOf(b) - erOf(a) : (b.reach || 0) - (a.reach || 0))).slice(0, 10).map((p) => ({
+      label: safeHref(p.permalink) ? h("a", { href: safeHref(p.permalink), target: "_blank", rel: "noopener" }, p.caption || "(tanpa caption)") : (p.caption || "(tanpa caption)"), title: p.caption || "",
+      value: S.rank === "er" ? erOf(p) : p.reach, text: S.rank === "er" ? `${fmtPct(erOf(p))} · reach ${fmtNum(p.reach)}` : `${fmtNum(p.reach)} · ER ${fmtPct(erOf(p))}` }));
+    const cmp = P ? [["Konten tayang", A.count, P.count, fmtNum], ["Total reach", A.reach, P.reach, fmtNum], ["Total views", A.views, P.views, fmtNum], ["Interaksi", A.inter, P.inter, fmtNum], ["ER", A.er, P.er, fmtPct]] : [];
+    const charts = !posts.length ? [] : [
+      section("Reach & interaksi per bulan", vbars(Object.keys(byMonth).sort().map((m) => { const a = agg(byMonth[m]); return { label: String(MONTHS[Number(m.slice(5)) - 1]).slice(0, 3) + " " + m.slice(2, 4), vals: [a.reach || 0, a.inter || 0] }; }),
+        [{ name: "Reach", color: "var(--brand)" }, { name: "Interaksi", color: "var(--ok)" }])),
+      section("ER per tipe konten", hbars(Object.entries(byType).map(([t, ps]) => { const a = agg(ps); return { label: t, value: a.er || 0, text: `${fmtPct(a.er)} · ${a.count} konten` }; }).sort((a, b) => b.value - a.value))),
+      P && section(`Perbandingan dengan ${prevLabel}`, h("div", {}, legend([{ name: `${label} ${S.y}`, color: "var(--brand)" }, { name: prevLabel, color: "var(--ink-3)" }]),
+        cmp.map(([t, a, b, f]) => h("div", { style: "margin:12px 0" }, h("div", { style: "font-weight:700;font-size:13.5px" }, t, " ", h("span", { class: "muted", style: "font-weight:400" }, t === "ER" ? "" : delta(a, b))),
+          hbars([{ label: `${label} ${S.y}`, value: a || 0, text: f(a) }, { label: prevLabel, value: b || 0, text: f(b), color: "var(--ink-3)" }]))))),
+      section("Peringkat konten", h("div", {}, h("div", { class: "row-tight no-print", style: "margin-bottom:8px" },
+        [["er", "Berdasarkan ER"], ["reach", "Berdasarkan reach"]].map(([k, t]) => h("button", { class: "btn sm" + (S.rank === k ? " primary" : ""), type: "button", "aria-pressed": String(S.rank === k), onclick: () => { S.rank = k; draw(); } }, t))),
+        rankRows.length ? hbars(rankRows) : h("p", { class: "muted" }, "Belum ada data untuk diurutkan."))),
+      section("Pertumbuhan followers", fl.length >= 2 ? lineChart(fl.map((f) => ({ date: f.date, v: f.followers }))) : h("p", { class: "muted" }, "Grafik muncul setelah ada minimal 2 data followers di periode ini. Isi kolom Followers saat input insight, atau tarik data Instagram.")),
+    ];
+
     const igBlock = !posts.length
       ? h("div", { class: "empty slim" }, h("p", {}, store.mode === "firebase"
           ? `Belum ada data Instagram untuk ${label} ${S.y}. Klik "Input konten manual" untuk mengisi sendiri (ER langsung terhitung), atau "Tarik data Instagram" bila API sudah terpasang.`
@@ -221,6 +304,7 @@ export async function render(ctx) {
             stat("Interaksi", fmtNum(A.inter), delta(A.inter, P?.inter) || "like, komentar, save, share"),
             stat("ER (interaksi / reach)", fmtPct(A.er), P?.er != null ? `periode lalu ${fmtPct(P.er)}` : ""),
             stat("Followers", fmtNum(lastFollowers), growth != null ? `${growth >= 0 ? "+" : ""}${fmtNum(growth)} selama periode` : "pertumbuhan terhitung setelah ≥2 kali tarik data")),
+          ...charts,
           section("Per tipe konten", table([["Tipe"], ["Jumlah", 1], ["Rata-rata reach", 1], ["Interaksi", 1], ["ER", 1]],
             Object.entries(byType).map(([t, ps]) => { const a = agg(ps); return [t, fmtNum(a.count), fmtNum(a.count ? a.reach / a.count : null), fmtNum(a.inter), fmtPct(a.er)]; }))),
           section("Per bulan", table([["Bulan"], ["Konten", 1], ["Reach", 1], ["Views", 1], ["Interaksi", 1]],
@@ -253,7 +337,7 @@ export async function render(ctx) {
       h("div", { class: "row-tight no-print", style: "margin-bottom:6px" }, yearSel, tabs),
       h("h2", { style: "font-size:22px;margin:6px 0 4px" }, `Report ${label} ${S.y}`),
       h("p", { class: "muted", style: "margin-bottom:16px" }, `${brand.name}${apiDocs[0]?.username ? " · @" + apiDocs[0].username : ""}${synced ? " · data Instagram terakhir ditarik " + fmtDate(new Date(synced).toISOString()) : ""}`),
-      section("Instagram", igBlock), posts.length > 0 && listBlock, section("Realisasi Content Plan", planBlock), section("Media & KOL", kolBlock));
+      ...(pending.length ? [pendBlock] : []), section("Instagram", igBlock), ...(posts.length > 0 ? [listBlock] : []), section("Realisasi Content Plan", planBlock), section("Media & KOL", kolBlock));
     actions.replaceChildren(
       h("button", { class: "btn primary", type: "button", onclick: () => openManual() }, icon("arrow", 16), "Input konten manual"),
       h("button", { class: "btn", type: "button", disabled: S.busy, onclick: () => sync().catch((e) => toast(e.message || String(e), "err")) }, S.busy ? "Menarik data…" : "Tarik data Instagram"),
