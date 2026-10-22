@@ -672,3 +672,33 @@ button.jb-box:disabled { opacity: 0.6; cursor: wait; }
 .kp-log { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; font-size: 13.5px; }
 .kp-outlet-list { display: grid; gap: 6px; }
 .kp-orow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+
+/* ---- Content Plan: menu, props, catatan ---- */
+.tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.tags:empty { display: none; }
+.tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 10px; border-radius: 999px; background: color-mix(in srgb, var(--brand) 13%, var(--surface)); color: var(--ink); font-size: 13px; font-weight: 600; }
+.tag button { border: 0; background: transparent; cursor: pointer; font-size: 16px; line-height: 1; padding: 0 6px; color: var(--ink-2); border-radius: 999px; }
+.tag button:hover { color: var(--danger); }
+.cp-line { margin-top: 5px; font-size: 13px; color: var(--ink-2); }
+.cp-note { margin-top: 5px; font-size: 12.5px; color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 320px; }
+
+/* ---- Unggah ke Drive ---- */
+.dz-input { display: none; }
+.dropzone { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: 16px 12px; border: 2px dashed var(--line-2, var(--line)); border-radius: 12px; cursor: pointer; background: var(--surface-2, transparent); transition: border-color .15s, background .15s; }
+.dropzone:hover, .dropzone:focus-visible, .dropzone.over { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, var(--surface)); outline: none; }
+.dropzone.off { cursor: not-allowed; opacity: .6; }
+.dropzone svg { color: var(--brand); }
+.dz-list { display: grid; gap: 6px; margin-top: 8px; }
+.dz-list:empty { display: none; }
+.dz-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px auto; gap: 8px; align-items: center; font-size: 13px; }
+.dz-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dz-track { height: 6px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.dz-bar { display: block; height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+.dz-row.bad { grid-template-columns: minmax(0, 1fr); color: var(--danger); } .dz-row.bad .dz-track { display: none; } .dz-row.bad .muted { color: var(--danger); }
+.dz-row.ok .dz-bar { background: var(--ok, #2f7d5b); }
+.filelist { display: grid; gap: 4px; margin-top: 8px; }
+.filelist:empty { display: none; }
+.fileitem { display: flex; align-items: center; gap: 8px; font-size: 14px; min-width: 0; }
+.fileitem a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+tr.dropping td { background: color-mix(in srgb, var(--brand) 12%, var(--surface)); outline: 2px dashed var(--brand); outline-offset: -2px; }
+tr.uploading { opacity: .55; pointer-events: none; }
