@@ -97,7 +97,7 @@ export async function render(ctx) {
     const c = existing || { id: newId("c"), status: "Planned", captionApproval: CAPTION_STATES[0], type: "Feed Post", platforms: ["Instagram"], ...defaults };
     const title = h("input", { class: "input", id: "ct-title", value: c.title || "", placeholder: "Contoh: Reels proses membuat salmon aburi" });
     const ref = h("input", { class: "input", id: "ct-ref", type: "url", value: c.reference || "", placeholder: "https://..." });
-    const plink = h("input", { class: "input", id: "ct-plink", type: "url", value: c.postLink || "", placeholder: "https://www.instagram.com/p/... (isi setelah konten tayang)" });
+    const plink = h("input", { class: "input", id: "ct-plink", type: "url", value: c.postLink || "", placeholder: "https://drive.google.com/..." });
     const cover = h("input", { class: "input", id: "ct-cover", type: "url", value: c.cover || "", placeholder: "https://... (opsional)" });
     const date = h("input", { class: "input", id: "ct-date", type: "date", value: c.date || "" });
     const time = h("input", { class: "input", id: "ct-time", type: "time", value: c.time || "" });
@@ -126,7 +126,7 @@ export async function render(ctx) {
       field("Referensi konten", ref, "Link contoh atau moodboard yang jadi acuan.", "ct-ref"),
       field("Caption", caption, null, "ct-caption"),
       h("div", { class: "row" }, field("Approval caption", capState, null, "ct-capstate"), field("Status konten", status, "Alur: Planned sampai Published (lihat SOP).", "ct-status")),
-field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten tayang, misalnya link Instagram, TikTok, atau YouTube.", "ct-plink"),
+field("Link Drive konten", plink, "Tempel link file atau folder konten di Google Drive. Pastikan akses sudah dibagikan ke tim.", "ct-plink"),
       field("Link cover / visual", cover, "Dipakai di simulasi feed Instagram. Link Google Drive atau gambar langsung; file harus bisa dilihat publik. Kalau kosong, tampil kotak warna.", "ct-cover"),
       field("Catatan", notes, null, "ct-notes"));
 
@@ -145,7 +145,7 @@ field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten
       onClick: async () => {
         if (!title.value.trim()) throw new Error("Judul konten wajib diisi.");
         if (!date.value) throw new Error("Tanggal upload wajib diisi supaya konten muncul di kalender.");
-        if (plink.value.trim() && !safeUrl(plink.value)) throw new Error("Link konten belum benar. Awali dengan https://");
+        if (plink.value.trim() && !safeUrl(plink.value)) throw new Error("Link Drive belum benar. Awali dengan https://");
         await store.saveContent(brand.id, {
           ...c, title: title.value.trim(), date: date.value, time: time.value, type: type.value, pillar: pillar.value.trim(),
           platforms: plats.filter(({ el }) => el.checked).map(({ p }) => p), reference: ref.value.trim(), caption: caption.value,
@@ -162,16 +162,16 @@ field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten
   function openLink(c) {
     const inp = h("input", { class: "input", id: "pl-url", type: "url", value: c.postLink || "", placeholder: "https://..." });
     dialog({
-      title: "Link konten",
+      title: "Link Drive konten",
       body: h("div", {}, h("p", { class: "muted", style: "margin-bottom:12px" }, c.title || "(tanpa judul)"),
-        field("Link postingan", inp, "Tempel link setelah konten tayang di platform.", "pl-url")),
+        field("Link Drive", inp, "Tempel link file atau folder konten di Google Drive.", "pl-url")),
       actions: [{ label: "Batal" }, {
         label: "Simpan", kind: "primary",
         onClick: async () => {
           const v = inp.value.trim();
           if (v && !safeUrl(v)) throw new Error("Link belum benar. Awali dengan https://");
           await store.saveContent(brand.id, { ...c, postLink: v });
-          await reload(); redraw(); toast(v ? "Link konten tersimpan." : "Link konten dikosongkan.");
+          await reload(); redraw(); toast(v ? "Link Drive tersimpan." : "Link Drive dikosongkan.");
         },
       }],
     });
@@ -249,7 +249,7 @@ field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten
 
       const postCell = (c) => {
         const pl = safeUrl(c.postLink);
-        const edit = h("button", { class: "linklike small", type: "button", "aria-label": `Ubah link konten ${c.title}`, onclick: () => openLink(c) }, pl ? "ubah" : (c.status === "Published" ? "Isi link (sudah tayang)" : "+ Isi link"));
+        const edit = h("button", { class: "linklike small", type: "button", "aria-label": `Ubah link Drive konten ${c.title}`, onclick: () => openLink(c) }, pl ? "ubah" : "+ Isi link");
         return h("div", {}, pl && h("a", { href: pl, target: "_blank", rel: "noopener noreferrer", title: pl }, h("span", {}, hostOf(pl)), icon("arrow", 13)),
           h("div", { class: c.status === "Published" && !pl ? "need-link" : "" }, edit));
       };
@@ -274,7 +274,7 @@ field("Link konten (hasil upload)", plink, "Tempel link postingan setelah konten
         return row;
       };
       tableBox.replaceChildren(h("div", { class: "tablewrap plain" }, h("table", {},
-        h("thead", {}, h("tr", {}, ["Tanggal", "Konten", "Referensi", "Platform", "Caption", "Status", "Link konten", ""].map((t) => h("th", {}, t)))),
+        h("thead", {}, h("tr", {}, ["Tanggal", "Konten", "Referensi", "Platform", "Caption", "Status", "Link Drive", ""].map((t) => h("th", {}, t)))),
         h("tbody", {}, rows.map(tr)))),
       h("p", { class: "muted", style: "margin-top:8px;font-size:13px" }, `${rows.length} dari ${items.length} konten`));
     }
