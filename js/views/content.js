@@ -1,4 +1,5 @@
 import { h, icon, toast, dialog, confirmDialog } from "../ui.js";
+import { attachEditor, attachView, newUid } from "../attach.js";
 
 /* ---------- pilihan isian (mengikuti SOP dan handbook) ---------- */
 const STATUSES = ["Planned", "Production", "Editing", "Pending Approval", "Revision Required", "Approved", "Published", "Upload Issue"];
@@ -76,17 +77,18 @@ export async function render(ctx) {
 
   let items = [];
   let events = [];
+  let standards = [];
   const reload = async () => {
-    [items, events] = await Promise.all([store.listContent(brand.id), store.listEvents(brand.id)]);
+    [items, events, standards] = await Promise.all([store.listContent(brand.id), store.listEvents(brand.id), store.listSub(brand.id, "content_standards")]);
   };
   await reload();
 
   const now = new Date();
   const S = { tab: "planner", y: now.getFullYear(), m: now.getMonth(), f: { q: "", status: "", pillar: "", platform: "", month: "" } };
-  const panels = { planner: h("div"), calendar: h("div"), feed: h("div") };
+  const panels = { planner: h("div"), calendar: h("div"), feed: h("div"), standar: h("div") };
   const tabsEl = h("div", { class: "tabs", role: "tablist" });
 
-  const redraw = () => { drawPlanner(); drawCalendar(); drawFeed(); };
+  const redraw = () => { drawPlanner(); drawCalendar(); drawFeed(); drawStandards(); };
   const guard = async (fn) => {
     try { await fn(); } catch (e) { toast(e.message || String(e), "err"); }
   };
@@ -389,8 +391,51 @@ field("Link Drive konten", plink, "Tempel link file atau folder konten di Google
       body);
   }
 
+  /* ---------------- standar konten & benchmark (teks + link + gambar) ---------------- */
+  const KINDS = ["Standar konten", "Benchmark"];
+  function openStandard(ex) {
+    const att = attachEditor(ex || {});
+    const kind = h("select", { class: "select", id: "st-kind" }, KINDS.map((k) => h("option", { value: k, selected: k === (ex?.kind || KINDS[0]) }, k)));
+    const title = h("input", { class: "input", id: "st-title", value: ex?.title || "", placeholder: "Contoh: Standar visual Reels, atau Benchmark akun kompetitor" });
+    const note = h("textarea", { class: "textarea", id: "st-note", rows: 4, placeholder: "Acuan yang dipakai: format, durasi, gaya visual, hook, target angka, dll." });
+    note.value = ex?.note || "";
+    dialog({
+      title: ex ? "Ubah standar / benchmark" : "Tambah standar / benchmark",
+      body: h("div", {}, field("Jenis", kind, null, "st-kind"), field("Judul", title, null, "st-title"), field("Catatan", note, null, "st-note"), att.el),
+      actions: [{ label: "Batal" }, { label: "Simpan", kind: "primary", onClick: async () => {
+        if (!title.value.trim()) throw new Error("Judul wajib diisi.");
+        const a = att.get();
+        const item = { ...(ex || {}), id: ex?.id || newId("s"), kind: kind.value, title: title.value.trim(), note: note.value.trim(), links: a.links, images: a.images, at: ex?.at || new Date().toISOString() };
+        await store.saveSub(brand.id, "content_standards", item);
+        standards = [...standards.filter((x) => x.id !== item.id), item];
+        drawStandards(); toast("Tersimpan.");
+      } }],
+    });
+  }
+  function drawStandards() {
+    const list = [...standards].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const card = (x) => h("div", { style: "border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--surface)" },
+      h("div", { style: "margin-bottom:6px" }, chip(x.kind || "Standar konten", x.kind === "Benchmark" ? "warn" : "")),
+      h("div", { style: "font-weight:700;margin-bottom:4px" }, x.title),
+      x.note ? h("div", { style: "white-space:pre-wrap;line-height:1.5;font-size:14px" }, x.note) : null,
+      attachView(x),
+      h("div", { class: "row-tight", style: "margin-top:10px" },
+        h("button", { class: "btn sm", type: "button", onclick: () => openStandard(x) }, "Ubah"),
+        h("button", { class: "btn sm danger", type: "button", onclick: () => guard(async () => {
+          if (!(await confirmDialog(`Hapus "${x.title}"?`, "Ya, hapus"))) return;
+          await store.deleteSub(brand.id, "content_standards", x.id);
+          standards = standards.filter((y) => y.id !== x.id);
+          drawStandards(); toast("Dihapus.");
+        }) }, "Hapus")));
+    panels.standar.replaceChildren(
+      h("p", { class: "muted", style: "margin-bottom:12px;max-width:66ch" }, "Kumpulkan standar konten (format, durasi, gaya visual) dan benchmark dari akun atau konten lain sebagai acuan tim. Bisa dilengkapi link atau gambar."),
+      h("div", { style: "margin-bottom:14px" }, h("button", { class: "btn primary", type: "button", onclick: () => openStandard(null) }, icon("plus", 16), "Tambah standar / benchmark")),
+      list.length ? h("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px" }, list.map(card))
+        : h("div", { class: "empty slim" }, h("p", {}, "Belum ada standar atau benchmark. Klik Tambah standar / benchmark.")));
+  }
+
   /* ---------------- rangka halaman ---------------- */
-  const TAB_DEFS = [["planner", "Content Planner"], ["calendar", "Marketing Calendar"], ["feed", "Feed Instagram"]];
+  const TAB_DEFS = [["planner", "Content Planner"], ["calendar", "Marketing Calendar"], ["feed", "Feed Instagram"], ["standar", "Standar & Benchmark"]];
   function drawTabs() {
     tabsEl.replaceChildren(...TAB_DEFS.map(([k, label]) => h("button", {
       type: "button", role: "tab", "aria-selected": String(S.tab === k),
@@ -409,6 +454,6 @@ field("Link Drive konten", plink, "Tempel link file atau folder konten di Google
         h("div", { class: "grow" }, h("h1", {}, "Content Plan"),
           h("p", { class: "lead" }, `Rencana konten ${brand.name}: tabel konten, kalender marketing, dan simulasi feed Instagram dalam satu data.`)),
         h("div", { class: "actions" }, h("button", { class: "btn primary", type: "button", onclick: () => openContent(null) }, icon("plus", 16), "Tambah konten"))),
-      tabsEl, panels.planner, panels.calendar, panels.feed),
+      tabsEl, panels.planner, panels.calendar, panels.feed, panels.standar),
   };
 }

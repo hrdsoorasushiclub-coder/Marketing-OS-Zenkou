@@ -3,7 +3,8 @@
 // snapshot per kuartal di brands/{id}/ig_reports, sehingga laporan lama tetap bisa dibuka tanpa memanggil API lagi.
 // Realisasi konten dan KOL dibaca dari data Content Plan dan Media & KOL yang sudah ada.
 
-import { h, icon, toast, fmtDate, dialog, confirmDialog } from "../ui.js";
+import { h, icon, toast, fmtDate, dialog, confirmDialog, isLead, ROLES } from "../ui.js";
+import { attachEditor, attachView, newUid } from "../attach.js";
 
 const PERIODS = [["Q1", "Q1 (Jan–Mar)", 0, 2], ["Q2", "Q2 (Apr–Jun)", 3, 5], ["Q3", "Q3 (Jul–Sep)", 6, 8], ["Q4", "Q4 (Okt–Des)", 9, 11], ["ANNUAL", "Tahunan", 0, 11]];
 const QUARTERS = ["Q1", "Q2", "Q3", "Q4"];
@@ -99,8 +100,9 @@ export async function render(ctx) {
   const crumbs = [{ label: "Operation", href: "#/ops" }, { label: brand.name }, { label: "Report" }];
   if (!brand.id || brand.id === "-") return { crumbs, node: h("div", { class: "empty" }, h("h3", {}, "Belum ada brand"), h("p", {}, "Tambahkan brand lebih dulu di Pengaturan > Brand.")) };
 
-  let [content, kols, snaps, follows] = await Promise.all([
-    store.listContent(brand.id), store.listSub(brand.id, "kol_campaigns"), store.listSub(brand.id, "ig_reports"), store.listSub(brand.id, "ig_followers"),
+  const user = ctx.user || {};
+  let [content, kols, snaps, follows, notes] = await Promise.all([
+    store.listContent(brand.id), store.listSub(brand.id, "kol_campaigns"), store.listSub(brand.id, "ig_reports"), store.listSub(brand.id, "ig_followers"), store.listSub(brand.id, "report_notes"),
   ]);
   const nowD = new Date();
   const S = { y: nowD.getFullYear(), key: "Q" + (Math.floor(nowD.getMonth() / 3) + 1), busy: false };
@@ -168,6 +170,49 @@ export async function render(ctx) {
     snaps = [...snaps.filter((s) => s.id !== id), doc];
     if (S.key !== "ANNUAL") S.key = q;
     S.y = Number(y);
+  }
+
+  /* ---------- saran & masukan atasan (teks + link + gambar), per periode ---------- */
+  const canNote = isLead(user);
+  function openNote(ex) {
+    const att = attachEditor(ex || {});
+    const text = h("textarea", { class: "textarea", rows: 5, placeholder: "Tulis saran atau masukan untuk periode ini" });
+    text.value = ex?.text || "";
+    dialog({
+      title: ex ? "Ubah saran & masukan" : "Tambah saran & masukan",
+      body: h("div", {}, h("div", { class: "field" }, h("label", {}, "Saran dan masukan"), text), att.el),
+      actions: [{ label: "Batal" }, { label: "Simpan", kind: "primary", onClick: async () => {
+        const t = text.value.trim(), a = att.get();
+        if (!t && !a.links.length && !a.images.length) throw new Error("Isi saran, atau lampirkan link atau gambar.");
+        const note = { ...(ex || {}), id: ex?.id || newUid("n"), year: S.y, period: S.key, text: t, links: a.links, images: a.images,
+          by: ex?.by || user.name || "", byUid: ex?.byUid || user.uid || "", byRole: ex?.byRole || user.role || "", at: ex?.at || new Date().toISOString() };
+        await store.saveSub(brand.id, "report_notes", note);
+        notes = [...notes.filter((n) => n.id !== note.id), note];
+        draw(); toast("Saran & masukan tersimpan.");
+      } }],
+    });
+  }
+  async function delNote(n) {
+    if (!(await confirmDialog("Hapus saran dan masukan ini?", "Hapus"))) return;
+    await store.deleteSub(brand.id, "report_notes", n.id);
+    notes = notes.filter((x) => x.id !== n.id);
+    draw(); toast("Dihapus.");
+  }
+  function notesBlock() {
+    const list = notes.filter((n) => n.year === S.y && n.period === S.key).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    const card = (n) => h("div", { style: "border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:12px;background:var(--surface)" },
+      h("div", { style: "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-bottom:6px" },
+        h("strong", {}, n.by || "Atasan"), h("span", { class: "muted", style: "font-size:13px" }, [ROLES[n.byRole] || n.byRole, fmtDate(n.at)].filter(Boolean).join(" · "))),
+      n.text ? h("div", { style: "white-space:pre-wrap;line-height:1.55" }, n.text) : null,
+      attachView(n),
+      canNote && (!n.byUid || n.byUid === user.uid || user.role === "executive")
+        ? h("div", { class: "row-tight no-print", style: "margin-top:10px" },
+            h("button", { class: "btn sm", type: "button", onclick: () => openNote(n) }, "Ubah"),
+            h("button", { class: "btn sm danger", type: "button", onclick: () => delNote(n).catch((e) => toast(e.message || String(e), "err")) }, "Hapus"))
+        : null);
+    return section("Saran & masukan atasan", h("div", {},
+      canNote ? h("div", { class: "no-print", style: "margin-bottom:12px" }, h("button", { class: "btn primary", type: "button", onclick: () => openNote(null) }, icon("plus", 16), "Tambah masukan")) : null,
+      list.length ? list.map(card) : h("div", { class: "empty slim" }, h("p", {}, canNote ? "Belum ada masukan untuk periode ini. Klik Tambah masukan." : "Belum ada saran atau masukan dari atasan untuk periode ini."))));
   }
 
   async function importXl() {
@@ -357,7 +402,7 @@ export async function render(ctx) {
       h("div", { class: "row-tight no-print", style: "margin-bottom:6px" }, yearSel, tabs),
       h("h2", { style: "font-size:22px;margin:6px 0 4px" }, `Report ${label} ${S.y}`),
       h("p", { class: "muted", style: "margin-bottom:16px" }, `${brand.name}${apiDocs[0]?.username ? " · @" + apiDocs[0].username : ""}${synced ? " · data Instagram terakhir ditarik " + fmtDate(new Date(synced).toISOString()) : ""}`),
-      ...(pending.length ? [pendBlock] : []), section("Instagram", igBlock), ...(posts.length > 0 ? [listBlock] : []), section("Realisasi Content Plan", planBlock), section("Media & KOL", kolBlock));
+      ...(pending.length ? [pendBlock] : []), section("Instagram", igBlock), ...(posts.length > 0 ? [listBlock] : []), section("Realisasi Content Plan", planBlock), section("Media & KOL", kolBlock), notesBlock());
     const pendingXl = XL_POSTS.filter((x) => !snaps.some((sn) => (sn.posts || []).some((q) => q.id === x.id))).length;
     actions.replaceChildren(
       ...(pendingXl ? [h("button", { class: "btn", type: "button", onclick: async () => {
