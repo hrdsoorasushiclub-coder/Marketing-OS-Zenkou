@@ -1,5 +1,6 @@
 import { h, icon, toast, dialog, confirmDialog } from "../ui.js";
 import { safeUrl } from "./content.js";
+import { printRab, downloadRabPdf } from "../rabdoc.js";
 
 /* Administrasi & Pengajuan (per brand). Koleksi:
    rab          : satu dokumen per RAB, rincian item disimpan di dalamnya
@@ -103,6 +104,37 @@ export async function render(ctx) {
     let rows = (r.items?.length ? r.items : [{}]).map((i) => ({ id: i.id || newId("i"), name: i.name || "", qty: i.qty ?? "", unit: i.unit || "", price: i.price ?? "" }));
     const sumRow = (x) => dec(x.qty) * (int(x.price) || 0);
 
+    // Tujuan transfer / pembayaran: boleh lebih dari satu rekening
+    const blankPay = () => ({ id: newId("p"), name: "", bank: "", account: "", amount: "", note: "" });
+    let pays = (r.payees?.length ? r.payees : [blankPay()]).map((p) => ({ id: p.id || newId("p"), name: p.name || "", bank: p.bank || "", account: p.account || "", amount: p.amount ?? "", note: p.note || "" }));
+    const payBox = h("div", { class: "rab-items" });
+    const payTotalEl = h("div", { class: "rab-total" });
+    const drawPayTotal = () => {
+      const t = pays.reduce((a, x) => a + (int(x.amount) || 0), 0), all = rows.reduce((a, x) => a + sumRow(x), 0);
+      payTotalEl.textContent = "Total transfer: " + fmtRp(t) + (t && t !== all ? `  (selisih dari total RAB: ${t > all ? "+" : "-"}${fmtRp(Math.abs(t - all))})` : "");
+    };
+    const drawPays = () => {
+      payBox.replaceChildren(
+        ...pays.map((x) => {
+          const inp = (key, ph, mode) => h("input", { class: "input", value: x[key], placeholder: ph, "aria-label": ph, inputmode: mode, style: "min-width:0", oninput: (e) => { x[key] = e.target.value; if (key === "amount") drawPayTotal(); } });
+          return h("div", { style: "border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:center" },
+            inp("name", "Atas nama / penerima"), inp("bank", "Bank (mis. BCA)"), inp("account", "No. rekening", "numeric"), inp("amount", "Jumlah transfer (Rp)", "numeric"), inp("note", "Keterangan (opsional)"),
+            h("button", { class: "btn sm ghost", type: "button", style: "justify-self:end", onclick: () => { pays = pays.filter((y) => y !== x); if (!pays.length) pays = [blankPay()]; drawPays(); } }, icon("x", 15), "Hapus"));
+        }),
+        h("button", { class: "btn sm", type: "button", onclick: () => { pays.push(blankPay()); drawPays(); } }, icon("plus", 14), "Tambah rekening"));
+      drawPayTotal();
+    };
+    drawPays();
+
+    // Penandatangan: nama dan jabatan untuk kolom TTD saat dicetak
+    const SIGN = [["diajukan", "Diajukan oleh"], ["diketahui", "Diketahui oleh"], ["disetujui", "Disetujui oleh"]];
+    const sg = Object.fromEntries(SIGN.map(([k]) => [k, {
+      name: h("input", { class: "input", value: r.signers?.[k]?.name || "", placeholder: "Nama", "aria-label": "Nama " + k, style: "min-width:0" }),
+      title: h("input", { class: "input", value: r.signers?.[k]?.title || "", placeholder: "Jabatan", "aria-label": "Jabatan " + k, style: "min-width:0" }),
+    }]));
+    const signBox = h("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px" },
+      SIGN.map(([k, label]) => h("div", { style: "border:1px solid var(--line);border-radius:12px;padding:10px;display:grid;gap:8px" }, h("b", { style: "font-size:13px" }, label), sg[k].name, sg[k].title)));
+
     const drawRows = () => {
       rowsBox.replaceChildren(
         h("div", { class: "rab-row head" }, h("span", {}, "Item"), h("span", {}, "Qty"), h("span", {}, "Satuan"), h("span", {}, "Harga satuan"), h("span", { class: "sub" }, "Subtotal"), h("span", {})),
@@ -116,17 +148,22 @@ export async function render(ctx) {
         h("button", { class: "btn sm", type: "button", onclick: () => { rows.push({ id: newId("i"), name: "", qty: "", unit: "", price: "" }); drawRows(); } }, icon("plus", 14), "Tambah item"));
       drawTotal();
     };
-    const drawTotal = () => { totalEl.textContent = "Total: " + fmtRp(rows.reduce((s, x) => s + sumRow(x), 0)); };
+    const drawTotal = () => { totalEl.textContent = "Total: " + fmtRp(rows.reduce((s, x) => s + sumRow(x), 0)); drawPayTotal(); };
     drawRows();
 
     const collect = () => ({
       ...r, title: title.value.trim(), date: date.value, status: status.value, purpose: purpose.value.trim(), notes: notes.value.trim(),
       items: rows.filter((x) => x.name.trim()).map((x) => ({ id: x.id, name: x.name.trim(), qty: dec(x.qty) || 1, unit: x.unit.trim(), price: int(x.price) || 0 })),
+      payees: pays.filter((x) => x.name.trim() || x.account.trim()).map((x) => ({ id: x.id, name: x.name.trim(), bank: x.bank.trim(), account: x.account.trim(), amount: int(x.amount) || 0, note: x.note.trim() })),
+      signers: Object.fromEntries(SIGN.map(([k]) => [k, { name: sg[k].name.value.trim(), title: sg[k].title.value.trim() }])),
     });
     editDialog({
       title: existing ? "Ubah RAB" : "RAB baru", existing, label: `RAB "${r.title}"`,
       body: h("div", {}, field("Judul RAB", title, null, "rb-title"), h("div", { class: "row" }, field("Tanggal", date, null, "rb-date"), field("Status", status, null, "rb-status")),
-        field("Keperluan", purpose, null, "rb-purpose"), h("div", { class: "field" }, h("span", { class: "lbl" }, "Rincian biaya"), rowsBox, totalEl), field("Catatan", notes, null, "rb-notes")),
+        field("Keperluan", purpose, null, "rb-purpose"), h("div", { class: "field" }, h("span", { class: "lbl" }, "Rincian biaya"), rowsBox, totalEl),
+        h("div", { class: "field" }, h("span", { class: "lbl" }, "Tujuan transfer / pembayaran"), payBox, payTotalEl, h("span", { class: "hint" }, "Isi lebih dari satu rekening kalau pembayaran dibagi ke beberapa penerima. Tampil sebagai tabel di cetakan.")),
+        field("Catatan", notes, null, "rb-notes"),
+        h("div", { class: "field" }, h("span", { class: "lbl" }, "Tanda tangan (tampil di cetakan)"), signBox, h("span", { class: "hint" }, "Nama dan jabatan boleh dikosongkan, kolom TTD tetap tercetak untuk ditandatangani basah."))),
       onSave: async () => {
         const d = collect();
         if (!d.title) throw new Error("Judul RAB wajib diisi.");
@@ -134,7 +171,11 @@ export async function render(ctx) {
         await save("rab", d);
       },
       onDelete: () => remove("rab", r.id),
-      extra: existing ? [{ label: "Unduh CSV", close: false, onClick: () => { exportRab(collect()); return false; } }] : [],
+      extra: [
+        { label: "Cetak", close: false, onClick: () => { printRab(collect(), brand); return false; } },
+        { label: "Unduh PDF", close: false, onClick: () => { downloadRabPdf(collect(), brand); return false; } },
+        ...(existing ? [{ label: "Unduh CSV", close: false, onClick: () => { exportRab(collect()); return false; } }] : []),
+      ],
     });
   }
 
@@ -142,6 +183,7 @@ export async function render(ctx) {
     const rows = [[r.title], ["Tanggal", r.date, "Status", r.status], ["Keperluan", r.purpose || ""], [], ["Item", "Qty", "Satuan", "Harga satuan", "Subtotal"]];
     (r.items || []).forEach((i) => rows.push([i.name, i.qty, i.unit, i.price, dec(i.qty) * (i.price || 0)]));
     rows.push([], ["Total", "", "", "", rabTotal(r)]);
+    if ((r.payees || []).length) { rows.push([], ["Tujuan transfer"], ["Atas nama", "Bank", "No. rekening", "Jumlah", "Keterangan"]); r.payees.forEach((p) => rows.push([p.name, p.bank, "'" + p.account, p.amount, p.note])); }
     download(`rab-${(r.title || "rab").toLowerCase().replace(/[^a-z0-9]+/g, "-")}.csv`, rows);
   }
 
@@ -165,6 +207,8 @@ export async function render(ctx) {
       h("td", {}, h("select", { class: "select inline", "aria-label": `Status ${r.title}`, onchange: (e) => guard(() => save("rab", { ...r, status: e.target.value })) }, opts(RAB_STATUS, r.status)), h("div", { style: "margin-top:6px" }, chip(r.status, rabKind(r.status)))),
       h("td", { class: "act" },
         h("button", { class: "btn sm ghost", type: "button", title: "Duplikat", "aria-label": `Duplikat ${r.title}`, onclick: () => guard(async () => { await save("rab", { ...r, id: newId("rab"), title: `${r.title} (salinan)`, status: "Draft", date: ymd(new Date()) }); toast("RAB diduplikat sebagai draft."); }) }, icon("copy", 16)),
+        h("button", { class: "btn sm ghost", type: "button", title: "Cetak RAB", "aria-label": `Cetak ${r.title}`, onclick: () => printRab(r, brand) }, "Cetak"),
+        h("button", { class: "btn sm ghost", type: "button", title: "Unduh PDF", "aria-label": `Unduh PDF ${r.title}`, onclick: () => downloadRabPdf(r, brand) }, "PDF"),
         h("button", { class: "btn sm ghost", type: "button", "aria-label": `Ubah ${r.title}`, onclick: () => openRab(r) }, icon("edit", 16))));
     panels.rab.replaceChildren(stats, toolbar,
       !rabs.length ? h("div", { class: "empty" }, h("h3", {}, "Belum ada RAB"), h("p", {}, `Buat rencana anggaran biaya pertama untuk ${brand.name}: isi item, jumlah, dan harga satuan, total dihitung otomatis.`), h("button", { class: "btn primary", type: "button", onclick: () => openRab(null) }, icon("plus", 16), "RAB baru"))
