@@ -84,22 +84,33 @@ export async function render(ctx) {
     return { crumbs, node: h("div", { class: "empty" }, h("h3", {}, "Belum ada brand"), h("p", {}, "Tambahkan brand lebih dulu di Pengaturan > Brand.")) };
   }
 
-  let kols = [], visits = [], tpls = [];
-  const reload = async () => {
-    [kols, visits, tpls] = await Promise.all(["kol_campaigns", "kol_visits", "kol_templates"].map((n) => store.listSub(brand.id, n)));
-  };
-  await reload();
-
+  // Satu halaman per campaign: `kols` dan `visits` selalu berisi data campaign yang sedang dibuka
+  // (allKols / allVisits = semua data). S.camp: "" = daftar campaign, NONE = KOL tanpa campaign, selain itu nama campaign.
   const today = () => ymd(new Date());
-  const S = { tab: "campaign", f: { q: "", type: "", status: "", campaign: "" }, date: today(), rsort: "terbaru", rcamp: "" };
-  const panels = { campaign: h("div"), visit: h("div"), tpl: h("div"), report: h("div") };
+  const NONE = "__none";
+  const SKEY = `kol_camp:${brand.id}`;
+  const S = { camp: "", extra: [], tab: "campaign", f: { q: "", type: "", status: "", campaign: "" }, date: today(), rsort: "terbaru", rcamp: "" };
+  let allKols = [], allVisits = [], kols = [], visits = [], tpls = [];
+  const inScope = (k) => (S.camp === NONE ? !k.campaign : k.campaign === S.camp);
+  const applyScope = () => {
+    kols = S.camp ? allKols.filter(inScope) : allKols;
+    visits = S.camp ? allVisits.filter((v) => { const k = v.campaignId && allKols.find((x) => x.id === v.campaignId); return k ? inScope(k) : S.camp === NONE; }) : allVisits;
+  };
+  const reload = async () => {
+    [allKols, allVisits, tpls] = await Promise.all(["kol_campaigns", "kol_visits", "kol_templates"].map((n) => store.listSub(brand.id, n)));
+    applyScope();
+  };
+  try { S.camp = sessionStorage.getItem(SKEY) || ""; } catch (e) {}
+  await reload();
+  if (S.camp === NONE ? !allKols.some((k) => !k.campaign) : S.camp && !allKols.some((k) => k.campaign === S.camp)) { S.camp = ""; applyScope(); }
+  const panels = { over: h("div"), campaign: h("div"), visit: h("div"), tpl: h("div"), report: h("div") };
   const tabsEl = h("div", { class: "tabs", role: "tablist" });
   const guard = async (fn) => { try { await fn(); } catch (e) { toast(e.message || String(e), "err"); } };
-  const redraw = () => { drawCampaign(); drawVisit(); drawTpl(); drawReport(); };
+  const redraw = () => { drawOverview(); drawCampaign(); drawVisit(); drawTpl(); drawReport(); };
   const save = async (name, item) => { await store.saveSub(brand.id, name, item); await reload(); redraw(); };
   const remove = async (name, id) => { await store.deleteSub(brand.id, name, id); await reload(); redraw(); };
   const saveKol = (k) => guard(() => save("kol_campaigns", k));
-  const campaignNames = () => [...new Set(kols.map((k) => k.campaign).filter(Boolean))].sort();
+  const campaignNames = () => [...new Set([...allKols.map((k) => k.campaign), ...S.extra].filter(Boolean))].sort();
   const kolById = (id) => kols.find((k) => k.id === id);
 
   const editDialog = ({ title, body, existing, label, onSave, onDelete, saveLabel }) => {
@@ -116,7 +127,7 @@ export async function render(ctx) {
 
   /* ---------------- editor KOL ---------------- */
   function openKol(type, existing) {
-    const k = existing || { id: newId("k"), type, platform: "Instagram", status: "Kandidat" };
+    const k = existing || { id: newId("k"), type, platform: "Instagram", status: "Kandidat", campaign: S.camp && S.camp !== NONE ? S.camp : "" };
     const t = k.type;
     const name = h("input", { class: "input", id: "kl-name", value: k.name || "", placeholder: "@namaakun", autocapitalize: "none", autocomplete: "off" });
     const platform = h("select", { class: "select", id: "kl-plat" }, opts(PLATFORMS, k.platform));
@@ -230,7 +241,7 @@ export async function render(ctx) {
 
     panels.campaign.replaceChildren(stats,
       h("div", { class: "toolbar" }, h("div", { class: "search" }, icon("search", 16), q),
-        sel("type", "Semua tipe", [["paid", "Paid"], ["barter", "Barter"]]), sel("status", "Semua status", allStatus), sel("campaign", "Semua campaign", campaignNames())),
+        sel("type", "Semua tipe", [["paid", "Paid"], ["barter", "Barter"]]), sel("status", "Semua status", allStatus)),
       box);
     drawTable();
   }
@@ -398,12 +409,11 @@ export async function render(ctx) {
       const head = ["KOL", "Tipe", "Campaign", "Platform", "Tanggal tayang", "Link", "Views", "Likes", "Komentar", "Share", "Save", "ER (%)", "Biaya (Rp)", "Biaya per view (Rp)"];
       const lines = [head.map(q).join(",")];
       rows.forEach((k) => lines.push([k.name, TYPE_LABEL[k.type], k.campaign, k.platform, k.postedAt, k.postLink, k.views, k.likes, k.comments, k.shares, k.saves, erActual(k)?.toFixed(2), k.type === "paid" ? k.price : "", k.type === "paid" && k.views && k.price ? (k.price / k.views).toFixed(0) : ""].map(q).join(",")));
-      const a = h("a", { href: URL.createObjectURL(new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" })), download: `reporting-kol-${brand.id}.csv` });
+      const a = h("a", { href: URL.createObjectURL(new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" })), download: `reporting-kol-${brand.id}${S.camp && S.camp !== NONE ? "-" + S.camp.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : ""}.csv` });
       document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 500);
     };
 
     const toolbar = h("div", { class: "toolbar" },
-      h("select", { class: "select", "aria-label": "Campaign", onchange: (e) => { S.rcamp = e.target.value; drawReport(); } }, h("option", { value: "" }, "Semua campaign"), campaignNames().map((c) => h("option", { value: c, selected: S.rcamp === c }, c))),
       h("select", { class: "select", "aria-label": "Urutkan", onchange: (e) => { S.rsort = e.target.value; drawReport(); } }, opts([["terbaru", "Terbaru"], ["views", "Views tertinggi"], ["er", "ER tertinggi"]], S.rsort)),
       h("span", { style: "flex:1" }), h("button", { class: "btn", type: "button", disabled: !rows.length, onclick: csv }, "Unduh CSV"));
 
@@ -427,25 +437,88 @@ export async function render(ctx) {
       pending.length > 0 && h("p", { class: "muted", style: "margin-top:12px;font-size:13px" }, `${pending.length} KOL sudah deal atau datang tapi belum posting: `, pending.slice(0, 6).map((k, i) => [i ? ", " : "", h("button", { class: "linklike small", type: "button", onclick: () => openMetrics(k) }, k.name)]), pending.length > 6 ? ` dan ${pending.length - 6} lainnya` : ""));
   }
 
+  /* ---------------- daftar campaign + navigasi ---------------- */
+  const head = h("div", { class: "page-head" });
+  function setCamp(name) {
+    S.camp = name; S.tab = "campaign"; S.f = { q: "", type: "", status: "", campaign: "" }; S.rcamp = "";
+    try { if (name) sessionStorage.setItem(SKEY, name); else sessionStorage.removeItem(SKEY); } catch (e) {}
+    applyScope(); redraw(); drawHead(); drawTabs();
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }
+  function newCamp() {
+    const input = h("input", { class: "input", id: "nc-name", placeholder: "Contoh: Opening Surabaya", autocomplete: "off" });
+    dialog({ title: "Campaign baru", body: field("Nama campaign", input, "Setiap campaign punya halaman sendiri. Campaign tersimpan setelah ada KOL di dalamnya.", "nc-name"),
+      actions: [{ label: "Batal" }, { label: "Buat", kind: "primary", onClick: async () => {
+        const n = input.value.trim(); if (!n) throw new Error("Nama campaign wajib diisi.");
+        if (!campaignNames().includes(n)) S.extra.push(n);
+        setCamp(n);
+      } }] });
+  }
+  function renameCamp() {
+    const input = h("input", { class: "input", id: "rn-name", value: S.camp, autocomplete: "off" });
+    dialog({ title: "Ubah nama campaign", body: field("Nama baru", input, "Semua KOL di campaign ini ikut berganti nama.", "rn-name"),
+      actions: [{ label: "Batal" }, { label: "Simpan", kind: "primary", onClick: async () => {
+        const nn = input.value.trim(), old = S.camp;
+        if (!nn) throw new Error("Nama campaign wajib diisi.");
+        if (nn === old) return;
+        if (campaignNames().includes(nn)) throw new Error("Nama itu sudah dipakai campaign lain.");
+        await Promise.all(allKols.filter((k) => k.campaign === old).map((k) => store.saveSub(brand.id, "kol_campaigns", { ...k, campaign: nn })));
+        S.extra = S.extra.map((e) => (e === old ? nn : e)); S.camp = nn;
+        try { sessionStorage.setItem(SKEY, nn); } catch (e) {}
+        await reload(); redraw(); drawHead(); toast("Nama campaign diubah.");
+      } }] });
+  }
+  function drawOverview() {
+    const names = campaignNames();
+    const groups = names.map((n) => ({ key: n, label: n, list: allKols.filter((k) => k.campaign === n) }));
+    const none = allKols.filter((k) => !k.campaign);
+    if (none.length) groups.push({ key: NONE, label: "Tanpa campaign", list: none });
+    const card = (g) => {
+      const l = g.list, c = (f) => l.filter(f).length;
+      const agreed = l.filter((k) => k.type === "paid" && ["Deal", "Sudah datang", "Sudah posting", "Selesai"].includes(k.status)).reduce((t, k) => t + (k.price || 0), 0);
+      const views = l.reduce((t, k) => t + (k.views || 0), 0);
+      return h("button", { type: "button", onclick: () => setCamp(g.key), "aria-label": `Buka campaign ${g.label}`,
+        style: "text-align:left;border:1px solid var(--line);border-radius:16px;padding:16px;background:var(--surface);cursor:pointer;display:grid;gap:8px;font:inherit;color:inherit" },
+        h("div", { style: "font-weight:700;font-size:16px" }, g.label),
+        h("div", { class: "chips" }, chip(`${l.length} KOL`, "brand"), chip(`Paid ${c((k) => k.type === "paid")}`), chip(`Barter ${c((k) => k.type === "barter")}`)),
+        h("div", { class: "muted", style: "font-size:13px" }, `Sudah datang ${c((k) => ["Sudah datang", "Sudah posting", "Selesai"].includes(k.status))} · Sudah posting ${c((k) => ["Sudah posting", "Selesai"].includes(k.status))}`),
+        (agreed > 0 || views > 0) && h("div", { class: "muted", style: "font-size:13px" }, [agreed > 0 ? `${fmtRp(agreed)} disepakati` : "", views > 0 ? `${fmtNum(views)} views` : ""].filter(Boolean).join(" · ")));
+    };
+    panels.over.replaceChildren(
+      groups.length
+        ? h("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px" }, groups.map(card))
+        : h("div", { class: "empty" }, h("h3", {}, "Belum ada campaign"), h("p", {}, "Buat campaign pertama, lalu tambahkan KOL paid atau barter di dalamnya."),
+            h("div", { class: "row", style: "justify-content:center;margin-top:12px" }, h("button", { class: "btn primary", type: "button", onclick: newCamp }, icon("plus", 16), "Campaign baru"))),
+      h("h2", { style: "margin:28px 0 4px;font-size:17px" }, "Template pesan approach"),
+      h("p", { class: "muted", style: "margin:0 0 8px;font-size:13px" }, "Berlaku untuk semua campaign."));
+  }
+  function drawHead() {
+    const inCamp = !!S.camp, title = S.camp === NONE ? "Tanpa campaign" : S.camp || "Media & KOL";
+    head.replaceChildren(
+      h("div", { class: "grow" },
+        inCamp && h("button", { class: "linklike", type: "button", onclick: () => setCamp("") }, "← Semua campaign"),
+        h("h1", {}, title),
+        h("p", { class: "lead" }, inCamp ? `Halaman campaign untuk ${brand.name}: database KOL, absensi kunjungan, template approach, dan reporting khusus campaign ini.` : `Satu halaman per campaign KOL ${brand.name}. Pilih campaign untuk melihat KOL, absensi kunjungan, dan reporting-nya.`)),
+      h("div", { class: "actions" },
+        inCamp
+          ? [h("button", { class: "btn primary", type: "button", onclick: () => { S.tab = "campaign"; drawTabs(); openKol("paid"); } }, icon("plus", 16), "KOL Paid"),
+             h("button", { class: "btn", type: "button", onclick: () => { S.tab = "campaign"; drawTabs(); openKol("barter"); } }, icon("plus", 16), "KOL Barter"),
+             S.camp !== NONE && h("button", { class: "btn", type: "button", onclick: renameCamp }, icon("edit", 16), "Ubah nama")]
+          : h("button", { class: "btn primary", type: "button", onclick: newCamp }, icon("plus", 16), "Campaign baru")));
+  }
+
   /* ---------------- rangka halaman ---------------- */
-  const TAB_DEFS = [["campaign", "Database Campaign"], ["visit", "Absensi Kunjungan"], ["tpl", "Template Approach"], ["report", "Reporting"]];
+  const TAB_DEFS = [["campaign", "Database KOL"], ["visit", "Absensi Kunjungan"], ["tpl", "Template Approach"], ["report", "Reporting"]];
   function drawTabs() {
+    const inCamp = !!S.camp;
+    tabsEl.hidden = !inCamp;
     tabsEl.replaceChildren(...TAB_DEFS.map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(S.tab === k), onclick: () => { S.tab = k; drawTabs(); } }, label)));
-    for (const [k, el] of Object.entries(panels)) el.hidden = k !== S.tab;
+    for (const [k, el] of Object.entries(panels)) el.hidden = inCamp ? k !== S.tab : !(k === "over" || k === "tpl");
   }
 
   redraw();
+  drawHead();
   drawTabs();
 
-  return {
-    crumbs,
-    node: h("div", {},
-      h("div", { class: "page-head" },
-        h("div", { class: "grow" }, h("h1", {}, "Media & KOL"),
-          h("p", { class: "lead" }, `Campaign KOL ${brand.name}: database paid dan barter, absensi kunjungan, template approach, dan reporting performa.`)),
-        h("div", { class: "actions" },
-          h("button", { class: "btn primary", type: "button", onclick: () => { S.tab = "campaign"; drawTabs(); openKol("paid"); } }, icon("plus", 16), "KOL Paid"),
-          h("button", { class: "btn", type: "button", onclick: () => { S.tab = "campaign"; drawTabs(); openKol("barter"); } }, icon("plus", 16), "KOL Barter"))),
-      tabsEl, panels.campaign, panels.visit, panels.tpl, panels.report),
-  };
+  return { crumbs, node: h("div", {}, head, tabsEl, panels.over, panels.campaign, panels.visit, panels.tpl, panels.report) };
 }
